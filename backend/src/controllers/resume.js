@@ -1,20 +1,49 @@
 const Resume = require('../models/resume');
-const Milestone = require('../models/milestone');
 const textProcessor = require('../services/text-processor');
-const { validationResult } = require('express-validator');
-const fs = require('fs').promises;
 const path = require('path');
+const fs = require('fs').promises;
 
 // Upload and process resume
 const uploadResume = async (req, res, next) => {
   try {
+    console.log('Resume upload request:', {
+      user: req.user.id,
+      file: req.file ? {
+        originalname: req.file.originalname,
+        size: req.file.size,
+        mimetype: req.file.mimetype
+      } : null
+    });
+
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'No file uploaded'
+        message: 'No file uploaded. Please select a file.'
       });
     }
 
+    // Validate file type
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      // Delete uploaded file
+      try {
+        await fs.unlink(req.file.path);
+      } catch (unlinkError) {
+        console.error('Error deleting invalid file:', unlinkError);
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid file type. Please upload PDF, DOC, or DOCX files only.'
+      });
+    }
+
+    // Create resume record
     const resume = await Resume.create({
       user: req.user.id,
       filename: req.file.filename,
@@ -25,18 +54,38 @@ const uploadResume = async (req, res, next) => {
       processingStatus: 'processing'
     });
 
-    // Process resume in background
+    console.log('Resume record created:', {
+      id: resume._id,
+      originalName: resume.originalName,
+      size: resume.fileSize
+    });
+
+    // Start background processing
     processResumeAsync(resume._id);
 
+    // Return immediate response
     res.status(201).json({
       success: true,
+      message: 'Resume uploaded successfully',
       data: {
         resumeId: resume._id,
         filename: resume.originalName,
+        size: resume.fileSize,
         status: 'processing'
       }
     });
   } catch (error) {
+    console.error('Resume upload error:', error);
+    
+    // Clean up file if it was uploaded
+    if (req.file && req.file.path) {
+      try {
+        await fs.unlink(req.file.path);
+      } catch (unlinkError) {
+        console.error('Error deleting file after error:', unlinkError);
+      }
+    }
+    
     next(error);
   }
 };
@@ -44,127 +93,61 @@ const uploadResume = async (req, res, next) => {
 // Background processing function
 const processResumeAsync = async (resumeId) => {
   try {
+    console.log('Starting resume processing for ID:', resumeId);
+    
     const resume = await Resume.findById(resumeId);
-    if (!resume) return;
+    if (!resume) {
+      console.error('Resume not found for processing:', resumeId);
+      return;
+    }
 
     // Extract text from file
-    const extractedText = await textProcessor.extractTextFromFile(resume.filePath, resume.mimeType);
-    
-    // Parse extracted text
-    const extractedData = await textProcessor.parseResumeText(extractedText);
-    
-    // Create milestones from extracted data
-    const milestones = await createMilestonesFromData(resume.user, extractedData, resume._id);
+    let extractedText = '';
+    let extractedData = {};
 
-    // Update resume
+    try {
+      extractedText = await textProcessor.extractTextFromFile(
+        resume.filePath, 
+        resume.mimeType
+      );
+      
+      console.log('Text extracted successfully, length:', extractedText.length);
+      
+      // Parse extracted text for structured data
+      extractedData = await textProcessor.parseResumeText(extractedText);
+      
+      console.log('Resume parsed successfully:', {
+        skills: extractedData.skills?.length || 0,
+        experience: extractedData.experience?.length || 0,
+        education: extractedData.education?.length || 0
+      });
+
+    } catch (processingError) {
+      console.error('Resume processing error:', processingError);
+      extractedText = 'Error extracting text from file';
+      extractedData = { error: processingError.message };
+    }
+
+    // Update resume with results
     await Resume.findByIdAndUpdate(resumeId, {
       extractedText,
       extractedData,
-      processingStatus: 'completed',
-      milestonesCreated: milestones.length
+      processingStatus: 'completed'
     });
 
+    console.log('Resume processing completed for ID:', resumeId);
+
   } catch (error) {
-    console.error('Resume processing error:', error);
-    await Resume.findByIdAndUpdate(resumeId, {
-      processingStatus: 'failed',
-      processingError: error.message
-    });
-  }
-};
-
-// Create milestones from extracted data
-const createMilestonesFromData = async (userId, data, resumeId) => {
-  const milestones = [];
-
-  try {
-    // Create experience milestones
-    if (data.experience && data.experience.length > 0) {
-      for (const exp of data.experience) {
-        const milestone = await Milestone.create({
-          user: userId,
-          title: exp.title || 'Work Experience',
-          description: exp.description || 'Professional experience',
-          type: 'job',
-          company: exp.company,
-          location: exp.location,
-          startDate: exp.startDate || new Date(),
-          endDate: exp.endDate,
-          skills: exp.skills || [],
-          extractedFrom: {
-            resumeId: resumeId,
-            confidence: 85
-          }
-        });
-        milestones.push(milestone);
-      }
+    console.error('Resume processing failed:', error);
+    
+    try {
+      await Resume.findByIdAndUpdate(resumeId, {
+        processingStatus: 'failed',
+        processingError: error.message
+      });
+    } catch (updateError) {
+      console.error('Error updating resume status:', updateError);
     }
-
-    // Create education milestones
-    if (data.education && data.education.length > 0) {
-      for (const edu of data.education) {
-        const milestone = await Milestone.create({
-          user: userId,
-          title: edu.degree || 'Education',
-          description: `${edu.degree} from ${edu.institution}`,
-          type: 'education',
-          company: edu.institution,
-          location: edu.location,
-          startDate: edu.startDate || new Date(),
-          endDate: edu.endDate,
-          extractedFrom: {
-            resumeId: resumeId,
-            confidence: 90
-          }
-        });
-        milestones.push(milestone);
-      }
-    }
-
-    // Create certification milestones
-    if (data.certifications && data.certifications.length > 0) {
-      for (const cert of data.certifications) {
-        const milestone = await Milestone.create({
-          user: userId,
-          title: cert.name,
-          description: `Certification from ${cert.issuer}`,
-          type: 'certification',
-          company: cert.issuer,
-          startDate: cert.date || new Date(),
-          url: cert.url,
-          extractedFrom: {
-            resumeId: resumeId,
-            confidence: 95
-          }
-        });
-        milestones.push(milestone);
-      }
-    }
-
-    // Create project milestones
-    if (data.projects && data.projects.length > 0) {
-      for (const project of data.projects) {
-        const milestone = await Milestone.create({
-          user: userId,
-          title: project.name,
-          description: project.description,
-          type: 'project',
-          startDate: new Date(),
-          technologies: project.technologies || [],
-          url: project.url,
-          extractedFrom: {
-            resumeId: resumeId,
-            confidence: 75
-          }
-        });
-        milestones.push(milestone);
-      }
-    }
-
-    return milestones;
-  } catch (error) {
-    console.error('Error creating milestones:', error);
-    return milestones;
   }
 };
 
@@ -173,7 +156,7 @@ const getResumes = async (req, res, next) => {
   try {
     const resumes = await Resume.find({ user: req.user.id })
       .sort({ createdAt: -1 })
-      .select('-extractedText -extractedData');
+      .select('-extractedText'); // Don't send full text in list
 
     res.json({
       success: true,
@@ -208,48 +191,8 @@ const getResumeDetails = async (req, res, next) => {
   }
 };
 
-// Delete resume
-const deleteResume = async (req, res, next) => {
-  try {
-    const resume = await Resume.findOne({
-      _id: req.params.id,
-      user: req.user.id
-    });
-
-    if (!resume) {
-      return res.status(404).json({
-        success: false,
-        message: 'Resume not found'
-      });
-    }
-
-    // Delete file
-    try {
-      await fs.unlink(resume.filePath);
-    } catch (fileError) {
-      console.error('Error deleting file:', fileError);
-    }
-
-    // Delete related milestones
-    await Milestone.deleteMany({
-      'extractedFrom.resumeId': resume._id
-    });
-
-    // Delete resume
-    await Resume.findByIdAndDelete(resume._id);
-
-    res.json({
-      success: true,
-      message: 'Resume deleted successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
 module.exports = {
   uploadResume,
   getResumes,
-  getResumeDetails,
-  deleteResume
+  getResumeDetails
 };

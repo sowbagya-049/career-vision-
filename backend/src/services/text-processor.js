@@ -1,14 +1,13 @@
+
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
 const fs = require('fs').promises;
-const { NlpManager } = require('node-nlp');
-
-// Initialize NLP manager for text processing
-const nlpManager = new NlpManager({ languages: ['en'] });
 
 // Extract text from file based on MIME type
 const extractTextFromFile = async (filePath, mimeType) => {
   try {
+    console.log('Extracting text from file:', filePath, 'type:', mimeType);
+    
     let text = '';
     
     if (mimeType === 'application/pdf') {
@@ -19,15 +18,18 @@ const extractTextFromFile = async (filePath, mimeType) => {
       const result = await mammoth.extractRawText({ path: filePath });
       text = result.value;
     } else if (mimeType === 'application/msword') {
-      // For older .doc files, you might need additional libraries
-      // For now, return empty text
-      text = '';
+      // For older .doc files, try to read as text
+      const buffer = await fs.readFile(filePath);
+      text = buffer.toString('utf8');
+    } else {
+      throw new Error('Unsupported file type');
     }
     
+    console.log('Text extraction successful, length:', text.length);
     return text;
   } catch (error) {
     console.error('Text extraction error:', error);
-    throw new Error('Failed to extract text from file');
+    throw new Error(`Failed to extract text from file: ${error.message}`);
   }
 };
 
@@ -36,12 +38,9 @@ const parseResumeText = async (text) => {
   try {
     const data = {
       personalInfo: {},
-      summary: '',
       skills: [],
       experience: [],
-      education: [],
-      certifications: [],
-      projects: []
+      education: []
     };
 
     if (!text || text.trim().length === 0) {
@@ -56,25 +55,16 @@ const parseResumeText = async (text) => {
     // Extract skills
     data.skills = extractSkills(text);
     
-    // Extract experience
+    // Extract experience (simplified)
     data.experience = extractExperience(lines);
     
-    // Extract education
+    // Extract education (simplified)
     data.education = extractEducation(lines);
-    
-    // Extract certifications
-    data.certifications = extractCertifications(lines);
-    
-    // Extract projects
-    data.projects = extractProjects(lines);
-    
-    // Extract summary
-    data.summary = extractSummary(lines);
     
     return data;
   } catch (error) {
     console.error('Resume parsing error:', error);
-    throw new Error('Failed to parse resume text');
+    throw new Error(`Failed to parse resume text: ${error.message}`);
   }
 };
 
@@ -102,16 +92,6 @@ const extractPersonalInfo = (lines) => {
     }
   }
   
-  // Look for location (city, state pattern)
-  const locationRegex = /[A-Za-z\s]+,\s*[A-Za-z]{2,}/;
-  const locationLine = lines.find(line => locationRegex.test(line));
-  if (locationLine) {
-    const locationMatch = locationLine.match(locationRegex);
-    if (locationMatch) {
-      info.location = locationMatch[0];
-    }
-  }
-  
   return info;
 };
 
@@ -119,17 +99,15 @@ const extractPersonalInfo = (lines) => {
 const extractSkills = (text) => {
   const skillKeywords = [
     // Programming languages
-    'javascript', 'python', 'java', 'c++', 'c#', 'php', 'ruby', 'go', 'rust', 'typescript',
+    'javascript', 'python', 'java', 'c++', 'c#', 'php', 'ruby', 'go', 'typescript',
     // Frameworks
-    'react', 'angular', 'vue', 'node.js', 'express', 'django', 'flask', 'spring', 'laravel',
+    'react', 'angular', 'vue', 'node.js', 'express', 'django', 'flask', 'spring',
     // Databases
-    'mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch', 'sqlite',
+    'mysql', 'postgresql', 'mongodb', 'redis',
     // Cloud platforms
-    'aws', 'azure', 'gcp', 'google cloud', 'docker', 'kubernetes',
+    'aws', 'azure', 'gcp', 'docker', 'kubernetes',
     // Tools
-    'git', 'jenkins', 'jira', 'confluence', 'photoshop', 'illustrator',
-    // Skills
-    'project management', 'team leadership', 'agile', 'scrum', 'devops'
+    'git', 'jenkins', 'photoshop'
   ];
   
   const foundSkills = [];
@@ -141,226 +119,82 @@ const extractSkills = (text) => {
     }
   });
   
-  // Remove duplicates and return
   return [...new Set(foundSkills)];
 };
 
-// Extract work experience
+// Extract work experience (simplified)
 const extractExperience = (lines) => {
   const experience = [];
-  const experienceKeywords = ['experience', 'work history', 'employment', 'professional experience'];
   
-  let inExperienceSection = false;
-  let currentJob = null;
+  // Look for common job title keywords
+  const jobKeywords = ['engineer', 'developer', 'manager', 'analyst', 'consultant', 'intern'];
   
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase();
+  lines.forEach((line, index) => {
+    const lowerLine = line.toLowerCase();
     
-    // Check if we're entering experience section
-    if (experienceKeywords.some(keyword => line.includes(keyword))) {
-      inExperienceSection = true;
-      continue;
-    }
-    
-    // Check if we're leaving experience section
-    if (inExperienceSection && (line.includes('education') || line.includes('skills') || line.includes('projects'))) {
-      inExperienceSection = false;
-    }
-    
-    if (inExperienceSection) {
-      // Look for job title patterns
-      const datePattern = /\d{4}|\d{1,2}\/\d{4}/;
-      if (datePattern.test(lines[i])) {
-        // If we have a current job, save it
-        if (currentJob) {
-          experience.push(currentJob);
-        }
-        
-        // Start new job entry
-        currentJob = {
-          title: lines[i - 1] || 'Work Experience',
-          company: extractCompanyFromLine(lines[i]),
-          location: '',
-          startDate: extractDateFromLine(lines[i], 'start'),
-          endDate: extractDateFromLine(lines[i], 'end'),
-          description: '',
-          skills: []
-        };
-      } else if (currentJob && lines[i].length > 10) {
-        // Add to description
-        currentJob.description += (currentJob.description ? ' ' : '') + lines[i];
-      }
-    }
-  }
-  
-  // Add the last job if exists
-  if (currentJob) {
-    experience.push(currentJob);
-  }
-  
-  return experience;
-};
-
-// Extract education
-const extractEducation = (lines) => {
-  const education = [];
-  const educationKeywords = ['education', 'academic background', 'qualifications'];
-  
-  let inEducationSection = false;
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase();
-    
-    if (educationKeywords.some(keyword => line.includes(keyword))) {
-      inEducationSection = true;
-      continue;
-    }
-    
-    if (inEducationSection && (line.includes('experience') || line.includes('skills') || line.includes('projects'))) {
-      inEducationSection = false;
-    }
-    
-    if (inEducationSection) {
-      const degreeKeywords = ['bachelor', 'master', 'phd', 'degree', 'diploma', 'certificate'];
+    if (jobKeywords.some(keyword => lowerLine.includes(keyword))) {
+      // Look for company name in next few lines
+      let company = '';
+      let duration = '';
       
-      if (degreeKeywords.some(keyword => line.includes(keyword))) {
-        const edu = {
-          degree: lines[i],
-          institution: lines[i + 1] || '',
-          location: '',
-          startDate: null,
-          endDate: null,
-          gpa: ''
-        };
-        
-        // Look for dates in next few lines
-        for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
-          const datePattern = /\d{4}/;
-          if (datePattern.test(lines[j])) {
-            edu.endDate = extractDateFromLine(lines[j], 'end');
+      for (let i = index + 1; i < Math.min(index + 3, lines.length); i++) {
+        if (lines[i].length > 5 && lines[i].length < 50) {
+          if (!company && !lines[i].match(/\d{4}/)) {
+            company = lines[i];
+          }
+          if (lines[i].match(/\d{4}/)) {
+            duration = lines[i];
             break;
           }
         }
-        
-        education.push(edu);
       }
-    }
-  }
-  
-  return education;
-};
-
-// Extract certifications
-const extractCertifications = (lines) => {
-  const certifications = [];
-  const certKeywords = ['certifications', 'certificates', 'licenses'];
-  
-  let inCertSection = false;
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase();
-    
-    if (certKeywords.some(keyword => line.includes(keyword))) {
-      inCertSection = true;
-      continue;
-    }
-    
-    if (inCertSection && (line.includes('experience') || line.includes('education') || line.includes('skills'))) {
-      inCertSection = false;
-    }
-    
-    if (inCertSection && lines[i].length > 5) {
-      certifications.push({
-        name: lines[i],
-        issuer: lines[i + 1] && lines[i + 1].length < 50 ? lines[i + 1] : 'Unknown',
-        date: extractDateFromLine(lines[i] + ' ' + (lines[i + 1] || ''), 'end'),
-        url: ''
+      
+      experience.push({
+        title: line,
+        company: company,
+        duration: duration,
+        description: `${line} at ${company}`
       });
     }
-  }
+  });
   
-  return certifications;
+  return experience.slice(0, 5); // Limit to 5 experiences
 };
 
-// Extract projects
-const extractProjects = (lines) => {
-  const projects = [];
-  const projectKeywords = ['projects', 'portfolio', 'personal projects'];
+// Extract education (simplified)
+const extractEducation = (lines) => {
+  const education = [];
+  const degreeKeywords = ['bachelor', 'master', 'phd', 'degree', 'diploma', 'university', 'college'];
   
-  let inProjectSection = false;
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase();
+  lines.forEach((line, index) => {
+    const lowerLine = line.toLowerCase();
     
-    if (projectKeywords.some(keyword => line.includes(keyword))) {
-      inProjectSection = true;
-      continue;
-    }
-    
-    if (inProjectSection && (line.includes('experience') || line.includes('education') || line.includes('skills'))) {
-      inProjectSection = false;
-    }
-    
-    if (inProjectSection && lines[i].length > 5) {
-      projects.push({
-        name: lines[i],
-        description: lines[i + 1] && lines[i + 1].length > 20 ? lines[i + 1] : '',
-        technologies: [],
-        url: extractUrlFromLine(lines[i] + ' ' + (lines[i + 1] || ''))
+    if (degreeKeywords.some(keyword => lowerLine.includes(keyword))) {
+      let institution = '';
+      let year = '';
+      
+      // Look for institution and year in nearby lines
+      for (let i = Math.max(0, index - 1); i < Math.min(index + 3, lines.length); i++) {
+        if (i !== index) {
+          if (!institution && lines[i].length > 10 && lines[i].length < 100) {
+            institution = lines[i];
+          }
+          const yearMatch = lines[i].match(/\b(19|20)\d{2}\b/);
+          if (yearMatch && !year) {
+            year = yearMatch[0];
+          }
+        }
+      }
+      
+      education.push({
+        degree: line,
+        institution: institution,
+        year: year
       });
     }
-  }
+  });
   
-  return projects;
-};
-
-// Extract summary
-const extractSummary = (lines) => {
-  const summaryKeywords = ['summary', 'objective', 'profile', 'about'];
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase();
-    
-    if (summaryKeywords.some(keyword => line.includes(keyword))) {
-      // Return the next few lines as summary
-      const summaryLines = lines.slice(i + 1, i + 5);
-      return summaryLines.join(' ').substring(0, 500);
-    }
-  }
-  
-  // If no summary section found, use first few meaningful lines
-  const meaningfulLines = lines.filter(line => line.length > 20).slice(0, 3);
-  return meaningfulLines.join(' ').substring(0, 500);
-};
-
-// Helper function to extract company from line
-const extractCompanyFromLine = (line) => {
-  // Simple extraction - in real implementation, this would be more sophisticated
-  const parts = line.split(/[-|@]/);
-  return parts.length > 1 ? parts[1].trim() : 'Unknown Company';
-};
-
-// Helper function to extract dates from line
-const extractDateFromLine = (line, type = 'start') => {
-  const datePattern = /\d{1,2}\/\d{4}|\d{4}/g;
-  const matches = line.match(datePattern);
-  
-  if (!matches) return null;
-  
-  if (matches.length === 1) {
-    return new Date(matches[0]);
-  } else if (matches.length === 2) {
-    return type === 'start' ? new Date(matches[0]) : new Date(matches[1]);
-  }
-  
-  return new Date(matches[0]);
-};
-
-// Helper function to extract URL from line
-const extractUrlFromLine = (line) => {
-  const urlPattern = /https?:\/\/[^\s]+/;
-  const match = line.match(urlPattern);
-  return match ? match[0] : '';
+  return education.slice(0, 3); // Limit to 3 education entries
 };
 
 module.exports = {

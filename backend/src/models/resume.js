@@ -35,6 +35,10 @@ const resumeSchema = new mongoose.Schema({
     enum: ['pending', 'processing', 'completed', 'failed'],
     default: 'pending'
   },
+  processingError: {
+    type: String,
+    default: null
+  },
   extractedData: {
     personalInfo: {
       name: String,
@@ -42,45 +46,18 @@ const resumeSchema = new mongoose.Schema({
       phone: String,
       location: String
     },
-    summary: String,
     skills: [String],
     experience: [{
       title: String,
       company: String,
-      location: String,
-      startDate: Date,
-      endDate: Date,
-      description: String,
-      skills: [String]
+      duration: String,
+      description: String
     }],
     education: [{
       degree: String,
       institution: String,
-      location: String,
-      startDate: Date,
-      endDate: Date,
-      gpa: String
-    }],
-    certifications: [{
-      name: String,
-      issuer: String,
-      date: Date,
-      url: String
-    }],
-    projects: [{
-      name: String,
-      description: String,
-      technologies: [String],
-      url: String
+      year: String
     }]
-  },
-  milestonesCreated: {
-    type: Number,
-    default: 0
-  },
-  processingError: {
-    type: String,
-    default: null
   }
 }, {
   timestamps: true

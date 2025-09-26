@@ -1,50 +1,51 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/user');
-const config = require('../config');
 
 const auth = async (req, res, next) => {
   try {
-    // Extract token from Authorization header
-    const authHeader = req.header('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    let token;
+
+    // Get token from header
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    // Make sure token exists
+    if (!token) {
       return res.status(401).json({
         success: false,
         message: 'Access denied. No token provided.'
       });
     }
 
-    const token = authHeader.replace('Bearer ', '');
-
-    // Verify token
-    let decoded;
     try {
-      decoded = jwt.verify(token, config.jwtSecret);
-    } catch (err) {
+      // Verify token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      
+      // Get user from token
+      const user = await User.findById(decoded.id).select('-password');
+      
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: 'Token is valid but user not found'
+        });
+      }
+
+      req.user = user;
+      next();
+    } catch (tokenError) {
+      console.error('Token verification error:', tokenError.message);
       return res.status(401).json({
         success: false,
-        message: err.name === 'TokenExpiredError'
-          ? 'Token expired. Please log in again.'
-          : 'Invalid token.'
+        message: 'Invalid or expired token'
       });
     }
-
-    // Find user by ID and exclude password
-    const user = await User.findById(decoded.id).select('-password');
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'User not found. Invalid token.'
-      });
-    }
-
-    // Attach user to request
-    req.user = user;
-    next();
   } catch (error) {
     console.error('Auth middleware error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Server error. Authentication failed.'
+      message: 'Server error in authentication'
     });
   }
 };
